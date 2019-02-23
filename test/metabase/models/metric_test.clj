@@ -123,7 +123,7 @@
                                  :definition              {:filter [:not [:= [:field-id 1] "toucans"]]}
                                  :revision_message        "Just horsing around"})))
 
-;; delete-metric!
+;; archive!
 (expect
   (merge metric-defaults
          {:creator_id  (user->id :rasta)
@@ -134,7 +134,7 @@
   (tt/with-temp* [Database [{database-id :id}]
                   Table    [{table-id :id}  {:db_id database-id}]
                   Metric   [{metric-id :id} {:table_id table-id}]]
-    (delete-metric! metric-id (user->id :crowberto) "revision message")
+    (archive! metric-id (user->id :crowberto) "revision message")
     (metric-details (retrieve-metric metric-id))))
 
 
