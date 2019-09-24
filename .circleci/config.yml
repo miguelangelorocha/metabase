@@ -262,7 +262,77 @@ jobs:
           command: ./bin/reflection-linter
           no_output_timeout: 5m
 
-  
+  test-driver:
+    parameters:
+      e:
+        type: executor
+        default: clojure
+      driver:
+        type: string
+      timeout:
+        type: string
+        default: 5m
+      jdbc-driver-source:
+        type: string
+        default: ""
+      jdbc-driver-dest:
+        type: string
+        default: ""
+      wait-for-port:
+        type: string
+        default: ""
+      auto-retry:
+        type: boolean
+        default: false
+    executor: << parameters.e >>
+    steps:
+      - attach-workspace
+      - restore-be-deps-cache
+      - when:
+          condition: << parameters.wait-for-port >>
+          steps:
+            - run:
+                name: Wait for << parameters.driver >> to be ready
+                command: >
+                  /home/circleci/metabase/metabase/.circleci/skip-driver-tests.sh << parameters.driver >> ||
+                  while ! nc -z localhost << parameters.wait-for-port >>; do sleep 0.1; done
+                no_output_timeout: 5m
+      - when:
+          condition: << parameters.jdbc-driver-source >>
+          steps:
+            - run:
+                name: Make plugins dir
+                command: mkdir /home/circleci/metabase/metabase/plugins
+            - run:
+                name: Download << parameters.driver >> JDBC driver JAR
+                command: >
+                  /home/circleci/metabase/metabase/.circleci/skip-driver-tests.sh << parameters.driver >> ||
+                  wget --output-document=plugins/<< parameters.jdbc-driver-dest >> ${<< parameters.jdbc-driver-source >>}
+                no_output_timeout: 5m
+      - unless:
+          condition: << parameters.auto-retry >>
+          steps:
+            - run:
+                name: Test << parameters.driver >> driver
+                environment:
+                  DRIVERS: h2,<< parameters.driver >>
+                command: >
+                  /home/circleci/metabase/metabase/.circleci/skip-driver-tests.sh << parameters.driver >> ||
+                  lein with-profile +ci test
+                no_output_timeout: << parameters.timeout >>
+      # This is exactly the same as without auto-retry but will try running the tests a second time if they fail
+      - when:
+          condition: << parameters.auto-retry >>
+          steps:
+            - run:
+                name: Test << parameters.driver >> driver
+                environment:
+                  DRIVERS: h2,<< parameters.driver >>
+                command: >
+                  /home/circleci/metabase/metabase/.circleci/skip-driver-tests.sh << parameters.driver >> ||
+                  lein with-profile +ci test || lein with-profile +ci test
+                no_output_timeout: << parameters.timeout >>
+
 
   test-migrate-from-h2:
     parameters:
@@ -311,6 +381,48 @@ jobs:
             - /home/circleci/metabase/metabase/node_modules
             - /home/circleci/yarn.lock.checksum
 
+  fe-linter-eslint:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run ESLint linter
+          command: lint-eslint
+
+  fe-linter-prettier:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run Prettier formatting linter
+          command: lint-prettier
+
+  fe-linter-flow:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run Flow type checker
+          command: flow
+
+  fe-tests-karma:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run frontend tests (karma)
+          command: run test-karma
+
+  fe-tests-unit:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run frontend unit tests
+          command: run test-unit
+
+  fe-tests-integration:
+    executor: node
+    steps:
+      - run-yarn-command:
+          command-name: Run frontend integration tests
+          command: run test-integration
+
   build-uberjar:
     executor: clojure-and-node
     steps:
@@ -330,6 +442,20 @@ jobs:
           key: uberjar-{{ checksum "./backend-checksums.txt" }}
           paths:
             - /home/circleci/metabase/metabase/target/uberjar/metabase.jar
+
+  fe-tests-e2e:
+    executor: clojure-and-node
+    steps:
+      - run-yarn-command:
+          command-name: Run frontend e2e tests
+          command: run test-e2e-no-build
+          before-steps:
+            - restore_cache:
+                keys:
+                  - uberjar-{{ checksum "./backend-checksums.txt" }}
+            - run:
+                name: Generate version file
+                command: ./bin/build version
 
 
 ########################################################################################################################
@@ -353,6 +479,10 @@ workflows:
     jobs:
       - checkout
 
+      - yaml-linter:
+          requires:
+            - checkout
+
       - verify-i18n-files:
           requires:
             - checkout
@@ -375,11 +505,85 @@ workflows:
           e: java-11
           lein-command: test
 
-      - deploy-master:
+      - lein:
+          name: be-linter-eastwood
+          requires:
+            - be-deps
+          lein-command: eastwood
+
+      - lein:
+          name: be-linter-docstring-checker
+          requires:
+            - be-deps
+          lein-command: docstring-checker
+
+      - lein:
+          name: be-linter-namespace-decls
+          requires:
+            - be-deps
+          lein-command: check-namespace-decls
+
+      - lein:
+          name: be-linter-bikeshed
+          requires:
+            - be-deps
+          lein-command: bikeshed
+
+      - be-linter-reflection-warnings:
+          requires:
+            - be-deps
+
+      - fe-deps:
+          requires:
+            - checkout
+      - fe-linter-eslint:
+          requires:
+            - fe-deps
+      - fe-linter-prettier:
+          requires:
+            - fe-deps
+      - fe-linter-flow:
+          requires:
+            - fe-deps
+      - fe-tests-karma:
+          requires:
+            - fe-deps
+      - fe-tests-unit:
+          requires:
+            - fe-deps
+      - fe-tests-integration:
+          requires:
+            - fe-deps
+      - build-uberjar:
+          requires:
+            - be-deps
+      - fe-tests-e2e:
           requires:
             - build-uberjar
+            - fe-deps
+
+      - deploy-master:
+          requires:
+            - yaml-linter
             - verify-i18n-files
-            
+
+            - be-linter-bikeshed
+            - be-linter-docstring-checker
+            - be-linter-eastwood
+            - be-linter-namespace-decls
+            - be-linter-reflection-warnings
+
+            - be-tests
+            - be-tests-java-11
+
+            - fe-linter-eslint
+            - fe-linter-flow
+            - fe-linter-prettier
+
+            - fe-tests-e2e
+            - fe-tests-integration
+            - fe-tests-karma
+            - fe-tests-unit
           filters:
             branches:
               only: master
