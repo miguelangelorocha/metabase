@@ -680,44 +680,46 @@ workflows:
 
       - deploy-master:
           requires:
+            - build-uberjar
+
             - yaml-linter
             - verify-i18n-files
 
-            - be-linter-bikeshed
-            - be-linter-docstring-checker
-            - be-linter-eastwood
-            - be-linter-namespace-decls
-            - be-linter-reflection-warnings
+            ## - be-linter-bikeshed
+            ## - be-linter-docstring-checker
+            ## - be-linter-eastwood
+            ## - be-linter-namespace-decls
+            ## - be-linter-reflection-warnings
 
-            - be-tests
-            - be-tests-java-11
+            ## - be-tests
+            ## - be-tests-java-11
 
-            - be-tests-bigquery
-            - be-tests-druid
-            - be-tests-googleanalytics
+            ## - be-tests-bigquery
+            ## - be-tests-druid
+            ## - be-tests-googleanalytics
             - be-tests-mongo
             - be-tests-mysql
-            - be-tests-oracle
-            - be-tests-postgres
-            - be-tests-presto
-            - be-tests-redshift
-            - be-tests-snowflake
-            - be-tests-sparksql
-            - be-tests-sqlite
-            - be-tests-sqlserver
-            - be-tests-vertica
+            ## - be-tests-oracle
+            ## - be-tests-postgres
+            ## - be-tests-presto
+            ## - be-tests-redshift
+            ## - be-tests-snowflake
+            ## - be-tests-sparksql
+            ## - be-tests-sqlite
+            ## - be-tests-sqlserver
+            ## - be-tests-vertica
 
-            - be-tests-migrate-to-mysql
-            - be-tests-migrate-to-postgres
+            ## - be-tests-migrate-to-mysql
+            ## - be-tests-migrate-to-postgres
 
-            - fe-linter-eslint
-            - fe-linter-flow
-            - fe-linter-prettier
+            ## - fe-linter-eslint
+            ## - fe-linter-flow
+            ## - fe-linter-prettier
 
-            - fe-tests-e2e
-            - fe-tests-integration
-            - fe-tests-karma
-            - fe-tests-unit
+            ## - fe-tests-e2e
+            ## - fe-tests-integration
+            ## - fe-tests-karma
+            ## - fe-tests-unit
           filters:
             branches:
               only: master
