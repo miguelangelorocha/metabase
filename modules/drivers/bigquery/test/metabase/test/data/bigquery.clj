@@ -4,6 +4,10 @@
              [format :as tformat]]
             [clojure.string :as str]
             [medley.core :as m]
+            [metabase
+             [config :as config]
+             [driver :as driver]
+             [util :as u]]
             [metabase.driver
              [bigquery :as bigquery]
              [google :as google]]
@@ -11,7 +15,6 @@
              [datasets :as datasets]
              [interface :as tx]
              [sql :as sql.tx]]
-            [metabase.util :as u]
             [metabase.util
              [date :as du]
              [schema :as su]]
@@ -24,40 +27,51 @@
 
 (sql.tx/add-test-extensions! :bigquery)
 
+;; Don't enable foreign keys when testing because BigQuery *doesn't* have a notion of foreign keys. Joins are still
+;; allowed, which puts us in a weird position, however; people can manually specifiy "foreign key" relationships in
+;; admin and everything should work correctly. Since we can't infer any "FK" relationships during sync our normal FK
+;; tests are not appropriate for BigQuery, so they're disabled for the time being.
+;;
+;; TODO - either write BigQuery-speciifc tests for FK functionality or add additional code to manually set up these FK
+;; relationships for FK tables
+(defmethod driver/supports? [:bigquery :foreign-keys] [_ _] (not config/is-test?))
+
+
 ;;; ----------------------------------------------- Connection Details -----------------------------------------------
 
-(def ^:private ^String normalize-name (comp (u/rpartial str/replace #"-" "_") name))
+(def ^:private ^String normalize-name (comp #(str/replace % #"-" "_") name))
 
-(def ^:private ^:const details
-  (datasets/when-testing-driver :bigquery
-    (reduce (fn [acc env-var]
-              (assoc acc env-var (tx/db-test-env-var-or-throw :bigquery env-var)))
-            {}
-            [:project-id :client-id :client-secret :access-token :refresh-token])))
+(def ^:private details
+  (delay
+    (reduce
+     (fn [acc env-var]
+       (assoc acc env-var (tx/db-test-env-var-or-throw :bigquery env-var)))
+     {}
+     [:project-id :client-id :client-secret :access-token :refresh-token])))
 
-(def ^:private ^:const ^String project-id (:project-id details))
+(def ^:private ^String project-id (:project-id @details))
 
-(def ^:private ^Bigquery bigquery
-  (datasets/when-testing-driver :bigquery
-    (#'bigquery/database->client {:details details})))
+(let [bigquery* (delay (#'bigquery/database->client {:details @details}))]
+  (defn- bigquery ^Bigquery []
+    @bigquery*))
 
 (defmethod tx/dbdef->connection-details :bigquery [_ _ {:keys [database-name]}]
-  (assoc details :dataset-id (normalize-name database-name)))
+  (assoc @details :dataset-id (normalize-name database-name)))
 
 
 ;;; -------------------------------------------------- Loading Data --------------------------------------------------
 
 (defn- create-dataset! [^String dataset-id]
   {:pre [(seq dataset-id)]}
-  (google/execute (.insert (.datasets bigquery) project-id (doto (Dataset.)
-                                                             (.setLocation "US")
-                                                             (.setDatasetReference (doto (DatasetReference.)
-                                                                                     (.setDatasetId dataset-id))))))
+  (google/execute (.insert (.datasets (bigquery)) project-id (doto (Dataset.)
+                                                               (.setLocation "US")
+                                                               (.setDatasetReference (doto (DatasetReference.)
+                                                                                       (.setDatasetId dataset-id))))))
   (println (u/format-color 'blue "Created BigQuery dataset '%s'." dataset-id)))
 
 (defn- destroy-dataset! [^String dataset-id]
   {:pre [(seq dataset-id)]}
-  (google/execute-no-auto-retry (doto (.delete (.datasets bigquery) project-id dataset-id)
+  (google/execute-no-auto-retry (doto (.delete (.datasets (bigquery)) project-id dataset-id)
                                   (.setDeleteContents true)))
   (println (u/format-color 'red "Deleted BigQuery dataset '%s'." dataset-id)))
 
@@ -69,7 +83,7 @@
    table-id         :- su/NonBlankString,
    field-name->type :- {su/KeywordOrString (apply s/enum valid-field-types)}]
   (google/execute
-   (.insert (.tables bigquery)
+   (.insert (.tables (bigquery))
             project-id
             dataset-id
             (doto (Table.)
@@ -88,7 +102,7 @@
 (defn- table-row-count ^Integer [^String dataset-id, ^String table-id]
   (ffirst (:rows (#'bigquery/post-process-native
                   (google/execute
-                   (.query (.jobs bigquery) project-id
+                   (.query (.jobs (bigquery)) project-id
                            (doto (QueryRequest.)
                              (.setQuery (format "SELECT COUNT(*) FROM [%s.%s]" dataset-id table-id)))))))))
 
@@ -102,7 +116,7 @@
 
 (defn- insert-data! [^String dataset-id, ^String table-id, row-maps]
   {:pre [(seq dataset-id) (seq table-id) (sequential? row-maps) (seq row-maps) (every? map? row-maps)]}
-  (google/execute (.insertAll (.tabledata bigquery) project-id dataset-id table-id
+  (google/execute (.insertAll (.tabledata (bigquery)) project-id dataset-id table-id
                               (doto (TableDataInsertAllRequest.)
                                 (.setRows (for [row-map row-maps]
                                             (let [data (TableRow.)]
@@ -190,7 +204,7 @@
 (defn- existing-dataset-names
   "Fetch a list of *all* dataset names that currently exist in the BQ test project."
   []
-  (for [dataset (get (google/execute (doto (.list (.datasets bigquery) project-id)
+  (for [dataset (get (google/execute (doto (.list (.datasets (bigquery)) project-id)
                                        ;; Long/MAX_VALUE barfs but it has to be a Long
                                        (.setMaxResults (long Integer/MAX_VALUE))))
                      "datasets")]

@@ -33,11 +33,11 @@ import {
   API_CREATE_QUESTION,
   QUERY_COMPLETED,
   RUN_QUERY,
-  SET_QUERY_MODE,
   setDatasetQuery,
   UPDATE_EMBEDDING_PARAMS,
   UPDATE_ENABLE_EMBEDDING,
   UPDATE_TEMPLATE_TAG,
+  SET_IS_SHOWING_TEMPLATE_TAGS_EDITOR,
 } from "metabase/query_builder/actions";
 import NativeQueryEditor from "metabase/query_builder/components/NativeQueryEditor";
 import { delay } from "metabase/lib/promise";
@@ -56,7 +56,7 @@ import Select from "metabase/components/Select";
 import RunButton from "metabase/query_builder/components/RunButton";
 import Scalar from "metabase/visualizations/visualizations/Scalar";
 import ParameterFieldWidget from "metabase/parameters/components/widgets/ParameterFieldWidget";
-import TextWidget from "metabase/parameters/components/widgets/TextWidget.jsx";
+import TextWidget from "metabase/parameters/components/widgets/TextWidget";
 import SaveQuestionModal from "metabase/containers/SaveQuestionModal";
 import SharingPane from "metabase/public/components/widgets/SharingPane";
 import { EmbedTitle } from "metabase/public/components/widgets/EmbedModalContent";
@@ -70,12 +70,12 @@ import EmbedWidget from "metabase/public/components/widgets/EmbedWidget";
 import { CardApi, DashboardApi, SettingsApi } from "metabase/services";
 
 const PEOPLE_TABLE_ID = 2;
-const PEOPLE_ID_FIELD_ID = 13;
+const PEOPLE_PK_FIELD_ID = 13;
 
-async function updateQueryText(store, queryText) {
+async function setQueryText(store, queryText) {
   // We don't have Ace editor so we have to trigger the Redux action manually
   const newDatasetQuery = getQuery(store.getState())
-    .updateQueryText(queryText)
+    .setQueryText(queryText)
     .datasetQuery();
 
   return store.dispatch(setDatasetQuery(newDatasetQuery));
@@ -141,23 +141,27 @@ describe("public/embedded", () => {
       // NOTE Atte Keinänen 8/9/17: Ace provides a MockRenderer class which could be used for pseudo-rendering and
       // testing Ace editor in tests, but it doesn't render stuff to DOM so I'm not sure how practical it would be
       NativeQueryEditor.prototype.loadAceEditor = () => {};
+      NativeQueryEditor.prototype._updateSize = () => {};
 
       const store = await createTestStore();
 
-      // load public sharing settings
-      store.pushPath(Urls.plainQuestion());
+      store.pushPath("/");
       const app = mount(store.getAppContainer());
-      await store.waitForActions([INITIALIZE_QB]);
+
+      await delay(500);
 
       click(app.find(".Icon-sql"));
-      await store.waitForActions([SET_QUERY_MODE]);
+      await store.waitForActions([INITIALIZE_QB]);
 
-      await updateQueryText(
+      await setQueryText(
         store,
         "select count(*) from products where {{category}}",
       );
 
+      await store.waitForActions([SET_IS_SHOWING_TEMPLATE_TAGS_EDITOR]);
       const tagEditorSidebar = app.find(TagEditorSidebar);
+
+      click(tagEditorSidebar.find("SelectButton"));
 
       const fieldFilterVarType = tagEditorSidebar
         .find(".ColumnarSelector-row")
@@ -202,26 +206,22 @@ describe("public/embedded", () => {
       click(tagEditorSidebar.find(".Icon-close"));
 
       // test without the parameter
-      click(app.find(RunButton));
+      click(app.find(RunButton).first());
       await store.waitForActions([RUN_QUERY, QUERY_COMPLETED]);
       expect(app.find(Scalar).text()).toBe(COUNT_ALL);
 
       // test the parameter
       const parameter = app.find(ParameterFieldWidget).first();
       click(parameter.find("div").first());
-      click(parameter.find('span[children="Doohickey"]'));
+      click(parameter.find('[children="Doohickey"]'));
+
       clickButton(parameter.find(".Button"));
-      click(app.find(RunButton));
+      click(app.find(RunButton).first());
       await store.waitForActions([RUN_QUERY, QUERY_COMPLETED]);
       expect(app.find(Scalar).text()).toBe(COUNT_DOOHICKEY);
 
       // save the question, required for public link/embedding
-      click(
-        app
-          .find(".Header-buttonSection a")
-          .first()
-          .find("a"),
-      );
+      click(app.find('[children="Save"]'));
 
       setInputValue(
         app.find(SaveQuestionModal).find("input[name='name']"),
@@ -418,7 +418,7 @@ describe("public/embedded", () => {
           type: "query",
           query: {
             "source-table": PEOPLE_TABLE_ID,
-            aggregation: ["count"],
+            aggregation: [["count"]],
           },
         },
       });
@@ -467,7 +467,7 @@ describe("public/embedded", () => {
             parameter_mappings: [
               {
                 card_id: mbqlCard.id,
-                target: ["dimension", ["field-id", PEOPLE_ID_FIELD_ID]],
+                target: ["dimension", ["field-id", PEOPLE_PK_FIELD_ID]],
                 parameter_id: "22486e00",
               },
             ],
